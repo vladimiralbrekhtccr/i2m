@@ -1,0 +1,13 @@
+# System
+.DS_Store
+
+# Secrets
+.env
+
+# Large Files
+large_files/
+
+# Python
+.venv/
+__pycache__/
+*.ipynb_checkpoints/
