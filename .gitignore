@@ -11,3 +11,6 @@ large_files/
 .venv/
 __pycache__/
 *.ipynb_checkpoints/
+
+src/data/
+src/output/
