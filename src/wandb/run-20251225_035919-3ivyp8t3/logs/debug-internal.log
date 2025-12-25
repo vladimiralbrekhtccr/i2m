@@ -1,0 +1,17 @@
+{"time":"2025-12-25T03:59:20.45125863-08:00","level":"INFO","msg":"stream: starting","core version":"0.20.1","symlink path":"/scratch/vladimir_albrekht/projects/i2m/src/wandb/run-20251225_035919-3ivyp8t3/logs/debug-core.log"}
+{"time":"2025-12-25T03:59:21.00784066-08:00","level":"INFO","msg":"stream: created new stream","id":"3ivyp8t3"}
+{"time":"2025-12-25T03:59:21.007872784-08:00","level":"INFO","msg":"stream: started","id":"3ivyp8t3"}
+{"time":"2025-12-25T03:59:21.007890403-08:00","level":"INFO","msg":"writer: Do: started","stream_id":"3ivyp8t3"}
+{"time":"2025-12-25T03:59:21.007910424-08:00","level":"INFO","msg":"handler: started","stream_id":"3ivyp8t3"}
+{"time":"2025-12-25T03:59:21.007960414-08:00","level":"INFO","msg":"sender: started","stream_id":"3ivyp8t3"}
+{"time":"2025-12-25T03:59:21.058713146-08:00","level":"ERROR","msg":"HTTP error","status":401,"method":"POST","url":"https://api.wandb.ai/graphql"}
+{"time":"2025-12-25T03:59:21.08018456-08:00","level":"ERROR","msg":"runupserter: failed to init run","error":"returned error 401: {\"data\":{\"upsertBucket\":null},\"errors\":[{\"message\":\"user is not logged in\",\"path\":[\"upsertBucket\"],\"extensions\":{\"code\":\"PERMISSION_ERROR\"}}]}"}
+{"time":"2025-12-25T03:59:22.082371145-08:00","level":"INFO","msg":"stream: closing","id":"3ivyp8t3"}
+{"time":"2025-12-25T03:59:22.083190964-08:00","level":"ERROR","msg":"sender: uploadConfigFile: stream: no run"}
+{"time":"2025-12-25T03:59:22.184696334-08:00","level":"ERROR","msg":"HTTP error","status":404,"method":"POST","url":"https://api.wandb.ai/graphql"}
+{"time":"2025-12-25T03:59:22.184773181-08:00","level":"ERROR","msg":"runfiles: CreateRunFiles returned error: returned error 404: {\"data\":{\"createRunFiles\":null},\"errors\":[{\"message\":\"project /i2m-diffusion not found during createRunFiles\",\"path\":[\"createRunFiles\"]}]}"}
+{"time":"2025-12-25T03:59:22.230783432-08:00","level":"INFO","msg":"fileTransfer: Close: file transfer manager closed"}
+{"time":"2025-12-25T03:59:22.230831524-08:00","level":"INFO","msg":"handler: closed","stream_id":"3ivyp8t3"}
+{"time":"2025-12-25T03:59:22.230838369-08:00","level":"INFO","msg":"writer: Close: closed","stream_id":"3ivyp8t3"}
+{"time":"2025-12-25T03:59:22.23091065-08:00","level":"INFO","msg":"sender: closed","stream_id":"3ivyp8t3"}
+{"time":"2025-12-25T03:59:22.231154245-08:00","level":"INFO","msg":"stream: closed","id":"3ivyp8t3"}

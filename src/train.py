@@ -1,4 +1,5 @@
 import os
+from dotenv import load_dotenv
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
@@ -10,12 +11,16 @@ import torchaudio
 import soundfile as sf
 import torch.nn as nn
 import torch.nn.functional as F
+import wandb
+
 
 from vocos import Vocos
 from pathlib import Path
 
 from datetime import datetime
 import matplotlib.pyplot as plt
+
+load_dotenv()
 
 ### Utils:
 def save_loss_log(losses: list, save_path: str):
@@ -120,7 +125,7 @@ class AudioProcessor:
         else:
             # Stereo -> mono
             waveform = torch.from_numpy(data.mean(axis=1)).unsqueeze(0)
-        
+        # ??? maybe         assert sr == self.target_sr, f"Expected {self.target_sr} Hz, got {sr}"
         # Resample если нужно
         if original_sr != self.target_sr:
             resampler = self._get_resampler(original_sr)
@@ -341,7 +346,7 @@ class MelAdapter:
         x = x.reshape(B, (H//PF) * (W//PT), C*PF*PT)
         return x
     
-    def unpack(self, patches, H=100, W=256):
+    def unpack(self, patches, H=100, W=280):
         """
         Input: [Bs, seq_len, C*PF*PT]
         Output: [B, 1, 100, 256] (Mel)
@@ -646,7 +651,7 @@ def setup_distributed():
     
     if world_size > 1:
         torch.cuda.set_device(local_rank)
-        dist.init_process_group(backend="gloo")  # gloo работает без NVML
+        dist.init_process_group(backend="gloo")
     
     return local_rank, world_size
 
@@ -654,74 +659,188 @@ def cleanup_distributed():
     if dist.is_initialized():
         dist.destroy_process_group()
 
+@torch.no_grad()
+def validate(model, val_dataloader, mel_adapter, noise_scheduler, device):
+    """Run validation and return metrics."""
+    model.eval()
+    
+    total_loss = 0
+    total_samples = 0
+    
+    # Losses at specific timesteps
+    timestep_losses = {100: [], 300: [], 500: [], 800: []}
+    
+    for mel_spec, image_patches in val_dataloader:
+        mel_spec = mel_spec.to(device)
+        image_patches = image_patches.to(device)
+        batch_size = mel_spec.shape[0]
+        
+        clean_patches = mel_adapter.pack(mel_spec)
+        
+        # Random timesteps for general loss
+        t = torch.randint(0, 1000, (batch_size,), device=device)
+        noisy_patches, noise = noise_scheduler.add_noise(clean_patches, t)
+        predicted_noise = model(noisy_patches, image_patches, t)
+        loss = F.mse_loss(predicted_noise, noise)
+        
+        total_loss += loss.item() * batch_size
+        total_samples += batch_size
+        
+        # Losses at specific timesteps (for first sample in batch)
+        for t_val in timestep_losses.keys():
+            t_fixed = torch.tensor([t_val], device=device)
+            noisy, noise = noise_scheduler.add_noise(clean_patches[:1], t_fixed)
+            pred = model(noisy, image_patches[:1], t_fixed)
+            timestep_losses[t_val].append(F.mse_loss(pred, noise).item())
+    
+    model.train()
+    
+    avg_loss = total_loss / total_samples
+    avg_timestep_losses = {k: sum(v) / len(v) for k, v in timestep_losses.items()}
+    
+    return {
+        'val_loss': avg_loss,
+        'val_loss_t100': avg_timestep_losses[100],
+        'val_loss_t300': avg_timestep_losses[300],
+        'val_loss_t500': avg_timestep_losses[500],
+        'val_loss_t800': avg_timestep_losses[800],
+    }
+
 
 def train():
     ### DISTRIBUTED SETUP
     local_rank, world_size = setup_distributed()
     is_main = (local_rank == 0)
+    start_time = datetime.now().strftime("%Y%m%d_%H%M%S")
     
     ### CONF
     DEVICE = f'cuda:{local_rank}'
-    BATCH_SIZE = 64  # Per GPU
+    BATCH_SIZE = 32  # Per GPU
     GRAD_ACCUM_STEPS = 1
     NUM_EPOCHS = 500
-    SAVE_EPOCHS_STEP = 250
+    SAVE_EPOCHS_STEP = 50
     LR = 1e-4
+    TRAIN_DATA_PATH = "/scratch/vladimir_albrekht/projects/i2m/src/data"
 
-    SAVE_PATH = "./output/ddp_run"
-    DATA_PATH = "/scratch/vladimir_albrekht/projects/i2m/src/data"
+    # Validation config
+    VAL_EVERY_N_EPOCHS = 5
+    VAL_DATA_PATH = "/scratch/vladimir_albrekht/projects/i2m/large_files/ILSVRC_images_10_class/eval_data_10_class_10_percent"
+
+    ### MODEL PARAMS:
+    HIDDEN_SIZE = 768
+    NUM_LAYERS = 12
+    NUM_HEADS = 12
+    #### MEL
+    PATCH_FREQ_H = 4
+    PATCH_TIME_W = 8
+
+
+    ### TRAINING ADJUSTMENTS
+    CONDITION_DROPOUT = 0.1
+    
+
+
+    # Wandb config
+    USE_WANDB = True
+    WANDB_PROJECT = "i2m-diffusion"
+    
+    WANDB_RUN_NAME = f"dit-h{HIDDEN_SIZE}-l{NUM_LAYERS}-cfg{CONDITION_DROPOUT}-{start_time}"
+    SAVE_PATH = f"./output/dit-h{HIDDEN_SIZE}-l{NUM_LAYERS}-cfg{CONDITION_DROPOUT}-{start_time}"
 
     if is_main:
         Path(SAVE_PATH).mkdir(parents=True, exist_ok=True)
+        
+        # Initialize wandb
+        if USE_WANDB:
+            wandb.init(
+                project=WANDB_PROJECT,
+                name=WANDB_RUN_NAME,
+                config={
+                    "hidden_size": HIDDEN_SIZE,
+                    "num_layers": NUM_LAYERS,
+                    "num_heads": NUM_HEADS,
+                    "batch_size": BATCH_SIZE,
+                    "world_size": world_size,
+                    "effective_batch_size": BATCH_SIZE * world_size,
+                    "learning_rate": LR,
+                    "num_epochs": NUM_EPOCHS,
+                    "condition_dropout": CONDITION_DROPOUT,
+                }
+            )
 
-    ### DATALOADER
+    ### DATALOADERS
     audio_processor = AudioProcessor(
         target_sr=24000,
         target_duration=3.0,
         device="cpu"
     )
     
-    dataset = ImageAudioDataset(
-        data_dir=DATA_PATH,
+    # Train dataset
+    train_dataset = ImageAudioDataset(
+        data_dir=TRAIN_DATA_PATH,
         audio_processor=audio_processor,
         image_size=512,
         patch_size=16,
+        pairs_file="pairs.json",
         device="cpu"
     )
     
-    # ✅ Distributed sampler
+    # Validation dataset
+    val_dataset = ImageAudioDataset(
+        data_dir=VAL_DATA_PATH,
+        audio_processor=audio_processor,
+        image_size=512,
+        patch_size=16,
+        pairs_file="pairs_eval.json",
+        device="cpu"
+    )
+    
+    if is_main:
+        print(f"Train samples: {len(train_dataset)}")
+        print(f"Val samples: {len(val_dataset)}")
+    
+    # Distributed sampler for training
     if world_size > 1:
-        sampler = DistributedSampler(dataset, shuffle=True)
+        train_sampler = DistributedSampler(train_dataset, shuffle=True)
         shuffle = False
     else:
-        sampler = None
+        train_sampler = None
         shuffle = True
     
-    dataloader = DataLoader(
-        dataset,
+    train_dataloader = DataLoader(
+        train_dataset,
         batch_size=BATCH_SIZE,
         shuffle=shuffle,
-        sampler=sampler,
+        sampler=train_sampler,
         num_workers=4,
         pin_memory=True,
         drop_last=True
     )
+    
+    # Validation dataloader (no distributed sampler, run only on main)
+    val_dataloader = DataLoader(
+        val_dataset,
+        batch_size=BATCH_SIZE,
+        shuffle=False,
+        num_workers=2,
+        pin_memory=True,
+        drop_last=False
+    )
 
     ### MODEL
-    mel_adapter = MelAdapter(patch_freq=4, patch_time=8)
+    mel_adapter = MelAdapter(patch_freq=PATCH_FREQ_H, patch_time=PATCH_TIME_W)
     noise_scheduler = NoiseScheduler(num_timesteps=1000, device=DEVICE)
 
     model = SimpleDiT(
         mel_input_dim=32,
         img_input_dim=768,
-        hidden_size=512,
+        hidden_size=HIDDEN_SIZE,
         mel_seq_len=875,
         img_seq_len=1024,
-        num_layers=4,
-        num_heads=8
+        num_layers=NUM_LAYERS,
+        num_heads=NUM_HEADS
     ).to(DEVICE)
 
-    # ✅ Wrap with DDP
     if world_size > 1:
         model = DDP(model, device_ids=[local_rank])
 
@@ -729,10 +848,11 @@ def train():
     scaled_lr = LR * (effective_batch_size / 32)
     
     optimizer = torch.optim.AdamW(model.parameters(), lr=scaled_lr, weight_decay=0.01)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=NUM_EPOCHS)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=NUM_EPOCHS, eta_min=1e-6)
 
-    loss_history = []
-
+    # Track best validation loss
+    best_val_loss = float('inf')
+    
     if is_main:
         print("=" * 60)
         print(f"Training started at: {datetime.now()}")
@@ -740,32 +860,42 @@ def train():
         print(f"Model params: {sum(p.numel() for p in model.parameters()):,}")
         print(f"Batch size: {BATCH_SIZE} x {world_size} = {effective_batch_size} effective")
         print(f"Learning rate: {scaled_lr:.2e}")
+        print(f"Condition dropout: {CONDITION_DROPOUT}")
+        print(f"Validation every {VAL_EVERY_N_EPOCHS} epochs")
         print("=" * 60)
 
-    ### TRAINING
+    ### TRAINING LOOP
+    global_step = 0
+    
     for epoch in range(NUM_EPOCHS):
-        # ✅ Set epoch for sampler
-        if sampler is not None:
-            sampler.set_epoch(epoch)
+        if train_sampler is not None:
+            train_sampler.set_epoch(epoch)
         
         model.train()
         epoch_loss = 0 
         num_batches = 0
+        uncond_batches = 0
 
         optimizer.zero_grad()
 
-        for batch_idx, (mel_spec, image_patches) in enumerate(dataloader):
+        for batch_idx, (mel_spec, image_patches) in enumerate(train_dataloader):
             mel_spec = mel_spec.to(DEVICE)
             image_patches = image_patches.to(DEVICE)
+
+            # Condition dropout
+            is_unconditional = torch.rand(1).item() < CONDITION_DROPOUT
+            if is_unconditional:
+                image_patches = torch.zeros_like(image_patches)
+                uncond_batches += 1
 
             clean_patches = mel_adapter.pack(mel_spec)
             actual_batch_size = mel_spec.shape[0]
             t = torch.randint(0, 1000, (actual_batch_size,), device=DEVICE)
             
             noisy_patches, noise = noise_scheduler.add_noise(clean_patches, t)
-
             predicted_noise = model(noisy_patches, image_patches, t)
             loss = F.mse_loss(predicted_noise, noise)
+            
             loss = loss / GRAD_ACCUM_STEPS
             loss.backward()
 
@@ -774,87 +904,141 @@ def train():
                 optimizer.step()
                 optimizer.zero_grad()
 
-            epoch_loss += loss.item() * GRAD_ACCUM_STEPS
+            batch_loss = loss.item() * GRAD_ACCUM_STEPS
+            epoch_loss += batch_loss
             num_batches += 1
+            global_step += 1
 
-            if is_main:
-                loss_history.append({
-                    'epoch': epoch,
-                    'batch': batch_idx,
-                    'loss': loss.item() * GRAD_ACCUM_STEPS
-                })
+            # Log to wandb every 20 steps
+            if is_main and USE_WANDB and global_step % 1 == 0:
+                wandb.log({
+                    "train/loss": batch_loss,
+                    "train/lr": scheduler.get_last_lr()[0],
+                    "train/epoch": epoch,
+                    "train/is_uncond": 1 if is_unconditional else 0,
+                }, step=global_step)
 
-                
-            print(f"Epoch {epoch:3d} | Batch {batch_idx:4d}/{len(dataloader)-1} | Loss {loss.item() * GRAD_ACCUM_STEPS:.6f} | LR {scheduler.get_last_lr()[0]:.2e}")
+            print(f"Epoch {epoch:3d} | Batch {batch_idx:4d}/{len(train_dataloader)-1} | Loss {batch_loss:.6f} | LR {scheduler.get_last_lr()[0]:.2e} | Uncond: {uncond_batches}/{num_batches}")
         
+        # Handle remaining gradients
         if (batch_idx + 1) % GRAD_ACCUM_STEPS != 0:
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
             optimizer.zero_grad()
 
-        avg_loss = epoch_loss / num_batches
+        avg_train_loss = epoch_loss / num_batches
         scheduler.step()
 
         if is_main:
-            loss_history.append({
-                'epoch': epoch,
-                'avg_loss': avg_loss
-            })
-            print(f">>> Epoch {epoch:3d} Avg Loss: {avg_loss:.6f}")
+            print(f">>> Epoch {epoch:3d} Avg Train Loss: {avg_train_loss:.6f}")
+            
+            # Log epoch metrics
+            if USE_WANDB:
+                wandb.log({
+                    "train/epoch_loss": avg_train_loss,
+                    "train/uncond_batches": uncond_batches,
+                }, step=global_step)
+            
+            # VALIDATION
+            if (epoch + 1) % VAL_EVERY_N_EPOCHS == 0:
+                print("Running validation...")
+                
+                # Get base model for validation
+                val_model = model.module if world_size > 1 else model
+                
+                val_metrics = validate(
+                    val_model, val_dataloader, mel_adapter, noise_scheduler, DEVICE
+                )
+                
+                print(f"    Val Loss: {val_metrics['val_loss']:.6f}")
+                print(f"    Val Loss t=100: {val_metrics['val_loss_t100']:.6f}")
+                print(f"    Val Loss t=300: {val_metrics['val_loss_t300']:.6f}")
+                print(f"    Val Loss t=500: {val_metrics['val_loss_t500']:.6f}")
+                print(f"    Val Loss t=800: {val_metrics['val_loss_t800']:.6f}")
+                
+                if USE_WANDB:
+                    wandb.log({
+                        "val/loss": val_metrics['val_loss'],
+                        "val/loss_t100": val_metrics['val_loss_t100'],
+                        "val/loss_t300": val_metrics['val_loss_t300'],
+                        "val/loss_t500": val_metrics['val_loss_t500'],
+                        "val/loss_t800": val_metrics['val_loss_t800'],
+                    }, step=global_step)
+                
+                # Save best model
+                if val_metrics['val_loss'] < best_val_loss:
+                    best_val_loss = val_metrics['val_loss']
+                    model_state = model.module.state_dict() if world_size > 1 else model.state_dict()
+                    
+                    torch.save({
+                        'epoch': epoch + 1,
+                        'model_state_dict': model_state,
+                        'optimizer_state_dict': optimizer.state_dict(),
+                        'val_loss': best_val_loss,
+                        'config': {
+                            'mel_input_dim': 32,
+                            'img_input_dim': 768,
+                            'hidden_size': HIDDEN_SIZE,
+                            'mel_seq_len': 875,
+                            'img_seq_len': 1024,
+                            'num_layers': NUM_LAYERS,
+                            'num_heads': NUM_HEADS
+                        }
+                    }, f"{SAVE_PATH}/best_model.pt")
+                    print(f"    ✓ New best model saved! Val loss: {best_val_loss:.6f}")
+            
             print("=" * 60)
             
-            # Save checkpoint every N epochs
+            # Regular checkpoint saving
             if (epoch + 1) % SAVE_EPOCHS_STEP == 0:
-                # ✅ Get model state (unwrap DDP if needed)
                 model_state = model.module.state_dict() if world_size > 1 else model.state_dict()
                 
                 checkpoint = {
                     'epoch': epoch + 1,
                     'model_state_dict': model_state,
                     'optimizer_state_dict': optimizer.state_dict(),
-                    'loss': avg_loss,
+                    'train_loss': avg_train_loss,
                     'config': {
                         'mel_input_dim': 32,
                         'img_input_dim': 768,
-                        'hidden_size': 512,
+                        'hidden_size': HIDDEN_SIZE,
                         'mel_seq_len': 875,
                         'img_seq_len': 1024,
-                        'num_layers': 4,
-                        'num_heads': 8
+                        'num_layers': NUM_LAYERS,
+                        'num_heads': NUM_HEADS
                     }
                 }
                 torch.save(checkpoint, f"{SAVE_PATH}/checkpoint_epoch{epoch+1}.pt")
-                print(f"✓ Saved checkpoint")
+                print(f"✓ Saved checkpoint epoch {epoch+1}")
 
-    ### SAVE FINAL MODEL
+    ### FINISH
     if is_main:
+        # Save final model
         model_state = model.module.state_dict() if world_size > 1 else model.state_dict()
         
-        checkpoint = {
+        torch.save({
             'epoch': NUM_EPOCHS,
             'model_state_dict': model_state,
             'optimizer_state_dict': optimizer.state_dict(),
-            'loss': avg_loss,
+            'train_loss': avg_train_loss,
             'config': {
                 'mel_input_dim': 32,
                 'img_input_dim': 768,
-                'hidden_size': 512,
+                'hidden_size': HIDDEN_SIZE,
                 'mel_seq_len': 875,
                 'img_seq_len': 1024,
-                'num_layers': 4,
-                'num_heads': 8
+                'num_layers': NUM_LAYERS,
+                'num_heads': NUM_HEADS
             }
-        }
-
-        torch.save(checkpoint, f"{SAVE_PATH}/dit_checkpoint.pt")
-        print(f"✓ Saved checkpoint to {SAVE_PATH}/dit_checkpoint.pt")
-
-        save_loss_log(loss_history, SAVE_PATH)
-        plot_loss(loss_history, SAVE_PATH)
-
+        }, f"{SAVE_PATH}/final_model.pt")
+        
         print("=" * 60)
         print(f"Training finished at {datetime.now()}")
+        print(f"Best validation loss: {best_val_loss:.6f}")
         print("=" * 60)
+        
+        if USE_WANDB:
+            wandb.finish()
     
     cleanup_distributed()
 

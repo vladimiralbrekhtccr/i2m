@@ -14,3 +14,4 @@ __pycache__/
 
 src/data/
 src/output/
+src/inference_output
