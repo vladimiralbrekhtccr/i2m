@@ -1,6 +1,13 @@
+import os
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data.distributed import DistributedSampler
+
+
 import math
 import torch
 import torchaudio
+import soundfile as sf
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -103,27 +110,28 @@ class AudioProcessor:
         return self._resamplers[orig_sr]
 
     def load_audio(self, audio_path: str) -> torch.Tensor:
-        r"""
-        Load and preprocess audio file.
+        """Load audio using soundfile instead of torchaudio."""
+        # Читаем через soundfile
+        data, original_sr = sf.read(audio_path, dtype='float32')
         
-        Pipe:
-            Input: Path to audio file.
-            Output: [1, target_samples] waveform at target_sr
-        """
-        waveform, original_sr = torchaudio.load(audio_path)
-
-        #mono
-        if waveform.shape[0] > 1:
-            waveform = waveform.mean(dim=0, keepdim=True)
+        # Конвертируем в torch tensor
+        if data.ndim == 1:
+            waveform = torch.from_numpy(data).unsqueeze(0)  # [1, samples]
+        else:
+            # Stereo -> mono
+            waveform = torch.from_numpy(data.mean(axis=1)).unsqueeze(0)
         
+        # Resample если нужно
         if original_sr != self.target_sr:
             resampler = self._get_resampler(original_sr)
             waveform = resampler(waveform)
         
+        # Pad/trim
         if waveform.shape[1] < self.target_samples:
-            waveform = F.pad(waveform, (0, self.target_samples - waveform.shape[1]  ))
+            waveform = F.pad(waveform, (0, self.target_samples - waveform.shape[1]))
         elif waveform.shape[1] > self.target_samples:
             waveform = waveform[:, :self.target_samples]
+        
         return waveform
     
     def waveform_to_mel(self, waveform:torch.Tensor) -> torch.Tensor:
@@ -631,25 +639,75 @@ class SimpleDiT(nn.Module):
 
         return prediction
 
-if __name__ == "__main__":
+def setup_distributed():
+    """Initialize distributed training."""
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    world_size = int(os.environ.get("WORLD_SIZE", 1))
+    
+    if world_size > 1:
+        torch.cuda.set_device(local_rank)
+        dist.init_process_group(backend="gloo")  # gloo работает без NVML
+    
+    return local_rank, world_size
+
+def cleanup_distributed():
+    if dist.is_initialized():
+        dist.destroy_process_group()
+
+
+def train():
+    ### DISTRIBUTED SETUP
+    local_rank, world_size = setup_distributed()
+    is_main = (local_rank == 0)
+    
     ### CONF
-    DEVICE = 'cuda'
-    BATCH_SIZE = 32
+    DEVICE = f'cuda:{local_rank}'
+    BATCH_SIZE = 64  # Per GPU
     GRAD_ACCUM_STEPS = 1
-    NUM_EPOCHS = 50
+    NUM_EPOCHS = 500
+    SAVE_EPOCHS_STEP = 250
     LR = 1e-4
 
-    SAVE_PATH = "./output/test_1"
+    SAVE_PATH = "./output/ddp_run"
+    DATA_PATH = "/scratch/vladimir_albrekht/projects/i2m/src/data"
 
-    Path(SAVE_PATH).mkdir(parents=True, exist_ok=True)
+    if is_main:
+        Path(SAVE_PATH).mkdir(parents=True, exist_ok=True)
 
-    dataloader = create_dataloader(
-        data_dir="./data",
-        batch_size=BATCH_SIZE,
-        num_workers=0,
+    ### DATALOADER
+    audio_processor = AudioProcessor(
+        target_sr=24000,
+        target_duration=3.0,
         device="cpu"
     )
+    
+    dataset = ImageAudioDataset(
+        data_dir=DATA_PATH,
+        audio_processor=audio_processor,
+        image_size=512,
+        patch_size=16,
+        device="cpu"
+    )
+    
+    # ✅ Distributed sampler
+    if world_size > 1:
+        sampler = DistributedSampler(dataset, shuffle=True)
+        shuffle = False
+    else:
+        sampler = None
+        shuffle = True
+    
+    dataloader = DataLoader(
+        dataset,
+        batch_size=BATCH_SIZE,
+        shuffle=shuffle,
+        sampler=sampler,
+        num_workers=4,
+        pin_memory=True,
+        drop_last=True
+    )
 
+    ### MODEL
     mel_adapter = MelAdapter(patch_freq=4, patch_time=8)
     noise_scheduler = NoiseScheduler(num_timesteps=1000, device=DEVICE)
 
@@ -663,40 +721,47 @@ if __name__ == "__main__":
         num_heads=8
     ).to(DEVICE)
 
-    effective_batch_size = BATCH_SIZE * GRAD_ACCUM_STEPS
+    # ✅ Wrap with DDP
+    if world_size > 1:
+        model = DDP(model, device_ids=[local_rank])
 
-    scaled_lr = LR * (effective_batch_size / 32) # why 32?
+    effective_batch_size = BATCH_SIZE * GRAD_ACCUM_STEPS * world_size
+    scaled_lr = LR * (effective_batch_size / 32)
+    
     optimizer = torch.optim.AdamW(model.parameters(), lr=scaled_lr, weight_decay=0.01)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=NUM_EPOCHS)
 
     loss_history = []
 
-    print("=" * 60)
-    print(f"Training started at:{datetime.now()}")
-    print(f"Model params: {sum(p.numel() for p in model.parameters()):,}")
-    print(f"Batch size: {BATCH_SIZE} x {GRAD_ACCUM_STEPS} = {effective_batch_size} effective")
-    print(f"Learning rate: {scaled_lr:.2e}")
-    print("=" * 60)
+    if is_main:
+        print("=" * 60)
+        print(f"Training started at: {datetime.now()}")
+        print(f"World size: {world_size} GPUs")
+        print(f"Model params: {sum(p.numel() for p in model.parameters()):,}")
+        print(f"Batch size: {BATCH_SIZE} x {world_size} = {effective_batch_size} effective")
+        print(f"Learning rate: {scaled_lr:.2e}")
+        print("=" * 60)
 
     ### TRAINING
     for epoch in range(NUM_EPOCHS):
+        # ✅ Set epoch for sampler
+        if sampler is not None:
+            sampler.set_epoch(epoch)
+        
+        model.train()
         epoch_loss = 0 
         num_batches = 0
 
         optimizer.zero_grad()
 
         for batch_idx, (mel_spec, image_patches) in enumerate(dataloader):
-            # mel_spec: [B, 1, 100, 280]
-            # image_patches: [B, 1024, 768]
-
             mel_spec = mel_spec.to(DEVICE)
             image_patches = image_patches.to(DEVICE)
 
             clean_patches = mel_adapter.pack(mel_spec)
             actual_batch_size = mel_spec.shape[0]
-            t = torch.randint(0, 1000, (actual_batch_size,), device=DEVICE).to(DEVICE)
-            # for test training with 500 timesteps only.
-            # t = torch.tensor([500], device=DEVICE)
+            t = torch.randint(0, 1000, (actual_batch_size,), device=DEVICE)
+            
             noisy_patches, noise = noise_scheduler.add_noise(clean_patches, t)
 
             predicted_noise = model(noisy_patches, image_patches, t)
@@ -705,7 +770,6 @@ if __name__ == "__main__":
             loss.backward()
 
             if (batch_idx + 1) % GRAD_ACCUM_STEPS == 0:
-                # gradient clipping
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.step()
                 optimizer.zero_grad()
@@ -713,12 +777,14 @@ if __name__ == "__main__":
             epoch_loss += loss.item() * GRAD_ACCUM_STEPS
             num_batches += 1
 
-            loss_history.append({
-                'epoch': epoch,
-                'batch': batch_idx,
-                'loss': loss.item() * GRAD_ACCUM_STEPS
-            })
+            if is_main:
+                loss_history.append({
+                    'epoch': epoch,
+                    'batch': batch_idx,
+                    'loss': loss.item() * GRAD_ACCUM_STEPS
+                })
 
+                
             print(f"Epoch {epoch:3d} | Batch {batch_idx:4d}/{len(dataloader)-1} | Loss {loss.item() * GRAD_ACCUM_STEPS:.6f} | LR {scheduler.get_last_lr()[0]:.2e}")
         
         if (batch_idx + 1) % GRAD_ACCUM_STEPS != 0:
@@ -727,38 +793,71 @@ if __name__ == "__main__":
             optimizer.zero_grad()
 
         avg_loss = epoch_loss / num_batches
-        loss_history.append({
-            'epoch': epoch,
-            'avg_loss': avg_loss
-        })
         scheduler.step()
 
-        print(f">>> Epoch {epoch:3d} Avg Loss: {avg_loss:.6f}")
-        print("=" * 60)
+        if is_main:
+            loss_history.append({
+                'epoch': epoch,
+                'avg_loss': avg_loss
+            })
+            print(f">>> Epoch {epoch:3d} Avg Loss: {avg_loss:.6f}")
+            print("=" * 60)
+            
+            # Save checkpoint every N epochs
+            if (epoch + 1) % SAVE_EPOCHS_STEP == 0:
+                # ✅ Get model state (unwrap DDP if needed)
+                model_state = model.module.state_dict() if world_size > 1 else model.state_dict()
+                
+                checkpoint = {
+                    'epoch': epoch + 1,
+                    'model_state_dict': model_state,
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'loss': avg_loss,
+                    'config': {
+                        'mel_input_dim': 32,
+                        'img_input_dim': 768,
+                        'hidden_size': 512,
+                        'mel_seq_len': 875,
+                        'img_seq_len': 1024,
+                        'num_layers': 4,
+                        'num_heads': 8
+                    }
+                }
+                torch.save(checkpoint, f"{SAVE_PATH}/checkpoint_epoch{epoch+1}.pt")
+                print(f"✓ Saved checkpoint")
 
-    ### SAVE MODEL
-    checkpoint = {
-        'epoch': NUM_EPOCHS,
-        'model_state_dict': model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-        'loss': avg_loss,
-        'config': {
-            'mel_input_dim': 32,
-            'img_input_dim': 768,
-            'hidden_size': 512,
-            'mel_seq_len': 875,
-            'img_seq_len': 1024,
-            'num_layers': 4,
-            'num_heads': 8
+    ### SAVE FINAL MODEL
+    if is_main:
+        model_state = model.module.state_dict() if world_size > 1 else model.state_dict()
+        
+        checkpoint = {
+            'epoch': NUM_EPOCHS,
+            'model_state_dict': model_state,
+            'optimizer_state_dict': optimizer.state_dict(),
+            'loss': avg_loss,
+            'config': {
+                'mel_input_dim': 32,
+                'img_input_dim': 768,
+                'hidden_size': 512,
+                'mel_seq_len': 875,
+                'img_seq_len': 1024,
+                'num_layers': 4,
+                'num_heads': 8
+            }
         }
-    }
 
-    torch.save(checkpoint, f"{SAVE_PATH}/dit_checkpoint.pt")
-    print(f"✓ Saved checkpoint to {SAVE_PATH}/dit_checkpoint.pt")
+        torch.save(checkpoint, f"{SAVE_PATH}/dit_checkpoint.pt")
+        print(f"✓ Saved checkpoint to {SAVE_PATH}/dit_checkpoint.pt")
 
-    save_loss_log(loss_history, SAVE_PATH)
-    plot_loss(loss_history, SAVE_PATH)
+        save_loss_log(loss_history, SAVE_PATH)
+        plot_loss(loss_history, SAVE_PATH)
 
-    print("=" * 60)
-    print(f"Training finished at {datetime.now()}")
-    print("=" * 60)
+        print("=" * 60)
+        print(f"Training finished at {datetime.now()}")
+        print("=" * 60)
+    
+    cleanup_distributed()
+
+
+if __name__ == "__main__":
+    train()
