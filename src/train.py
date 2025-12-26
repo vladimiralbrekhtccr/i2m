@@ -723,7 +723,7 @@ def train():
     TRAIN_DATA_PATH = "/scratch/vladimir_albrekht/projects/i2m/src/data"
 
     # Validation config
-    VAL_EVERY_N_EPOCHS = 5
+    VAL_EVERY_N_EPOCHS = 10
     VAL_DATA_PATH = "/scratch/vladimir_albrekht/projects/i2m/large_files/ILSVRC_images_10_class/eval_data_10_class_10_percent"
 
     ### MODEL PARAMS:
@@ -736,7 +736,7 @@ def train():
 
 
     ### TRAINING ADJUSTMENTS
-    CONDITION_DROPOUT = 0.1
+    CONDITION_DROPOUT = 0.1 # TODO: read about it
     
 
 
@@ -744,8 +744,8 @@ def train():
     USE_WANDB = True
     WANDB_PROJECT = "i2m-diffusion"
     
-    WANDB_RUN_NAME = f"dit-h{HIDDEN_SIZE}-l{NUM_LAYERS}-cfg{CONDITION_DROPOUT}-{start_time}"
-    SAVE_PATH = f"./output/dit-h{HIDDEN_SIZE}-l{NUM_LAYERS}-cfg{CONDITION_DROPOUT}-{start_time}"
+    WANDB_RUN_NAME = f"20_a_dit-h{HIDDEN_SIZE}-l{NUM_LAYERS}-cfg{CONDITION_DROPOUT}-{start_time}"
+    SAVE_PATH = f"./output/20_a_dit-h{HIDDEN_SIZE}-l{NUM_LAYERS}-cfg{CONDITION_DROPOUT}-{start_time}"
 
     if is_main:
         Path(SAVE_PATH).mkdir(parents=True, exist_ok=True)

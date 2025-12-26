@@ -16,8 +16,8 @@ from src.train import MelAdapter, NoiseScheduler, SimpleDiT, AudioProcessor
 DEVICE = "cuda"
 # MODEL_PATH = "/scratch/vladimir_albrekht/projects/i2m/src/output/ddp_run/checkpoint_epoch250.pt"
 # OUTPUT_DIR = Path("/scratch/vladimir_albrekht/projects/i2m/src/inference_output/checkpoint_epoch250")
-MODEL_PATH = "/scratch/vladimir_albrekht/projects/i2m/src/output/dit-h768-l12-cfg0.1-20251225_040630/best_model.pt"
-OUTPUT_DIR = Path("/scratch/vladimir_albrekht/projects/i2m/src/inference_output/dit-h768-l12-cfg0.1-20251225_040630/best_model.pt")
+MODEL_PATH = "/scratch/vladimir_albrekht/projects/i2m/src/output/dit-h768-l12-cfg0.1-20251225_040630/checkpoint_epoch500.pt"
+OUTPUT_DIR = Path("/scratch/vladimir_albrekht/projects/i2m/src/inference_output/dit-h768-l12-cfg0.1-20251225_040630/checkpoint_epoch500.pt")
 
 IMAGE_PATH = "/scratch/vladimir_albrekht/projects/i2m/large_files/ILSVRC_images_10_class/images_10_class/007_cock/01047.jpg"
 AUDIO_PATH = "/scratch/vladimir_albrekht/projects/i2m/large_files/ILSVRC_images_10_class/audios_augmented_v2/007_cock/01047_john_none.wav"
