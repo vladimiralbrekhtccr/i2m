@@ -17,7 +17,7 @@ import wandb
 from vocos import Vocos
 from pathlib import Path
 
-from datetime import datetime
+from datetime import pdatetime
 import matplotlib.pyplot as plt
 
 load_dotenv()
@@ -741,7 +741,7 @@ def train():
 
 
     # Wandb config
-    USE_WANDB = True
+    USE_WANDB = False
     WANDB_PROJECT = "i2m-diffusion"
     
     WANDB_RUN_NAME = f"20_a_dit-h{HIDDEN_SIZE}-l{NUM_LAYERS}-cfg{CONDITION_DROPOUT}-{start_time}"
