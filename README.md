@@ -1,5 +1,26 @@
 # i2m
 
+## Status.
+
+We have a working pipeline.
+
+Current problem. I have a datasets consist of:
+
+10 classes (1300 images each) (1 mel each)
+
+So when model trains it sees ('noisified_mel by some factor' and 'image-condition') 
+
+During inference problem is that model tends to denoise into 1 class only and ignores 'condition-image' completely. 
+
+I tried to add condition-dropout for images, such that model will see somtimes images sometimes not, but it didn't helped. 
+
+I tried to increase the amount of audio per class to 20. So it was 1 audio per class and became 20 audios per class, I will retrain with this one, because there was crush in train.
+
+Overall model can denoise but when MEL complete noise it doesn't understand what to do. 
+
+
+![alt text](image.png)
+
 ## uv
 
 ```bash
