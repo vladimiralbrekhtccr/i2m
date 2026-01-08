@@ -489,6 +489,10 @@ class NoiseScheduler:
 # DiT Block: The actual brain (Attention + MLP).
 # Final Model: Puts it all together.
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+TRAIN_JSON = PROJECT_ROOT / "train.json"
+EVAL_JSON  = PROJECT_ROOT / "eval.json"
+
 class TimestepEmbedder(nn.Module):
     """
     Input: Time integer (e.g., 500)
@@ -720,12 +724,11 @@ def train():
     NUM_EPOCHS = 500
     SAVE_EPOCHS_STEP = 50
     LR = 1e-4
-    TRAIN_DATA_PATH = os.path.join(os.path.dirname(__file__), "example_of_data")
-
+    TRAIN_DATA_PATH = TRAIN_JSON
 
     # Validation config
     VAL_EVERY_N_EPOCHS = 10
-    VAL_DATA_PATH = "/scratch/vladimir_albrekht/projects/i2m/large_files/ILSVRC_images_10_class/eval_data_10_class_10_percent"
+    VAL_DATA_PATH = EVAL_JSON
 
     ### MODEL PARAMS:
     HIDDEN_SIZE = 768
@@ -734,7 +737,6 @@ def train():
     #### MEL
     PATCH_FREQ_H = 4
     PATCH_TIME_W = 8
-
 
     ### TRAINING ADJUSTMENTS
     CONDITION_DROPOUT = 0.1 # TODO: read about it
