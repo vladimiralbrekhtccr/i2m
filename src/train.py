@@ -780,21 +780,21 @@ def train():
     
     # Train dataset
     train_dataset = ImageAudioDataset(
-        data_dir=TRAIN_DATA_PATH,
+        data_dir=PROJECT_ROOT,
         audio_processor=audio_processor,
         image_size=512,
         patch_size=16,
-        pairs_file="pairs.json",
+        pairs_file="train.json",
         device="cpu"
     )
     
     # Validation dataset
     val_dataset = ImageAudioDataset(
-        data_dir=VAL_DATA_PATH,
+        data_dir=PROJECT_ROOT,
         audio_processor=audio_processor,
         image_size=512,
         patch_size=16,
-        pairs_file="pairs_eval.json",
+        pairs_file="eval.json",
         device="cpu"
     )
     
