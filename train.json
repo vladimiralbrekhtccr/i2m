@@ -1,0 +1,58 @@
+[
+  {
+    "image": "/home/vladimir_albrekht/projects/img_to_spec/data/images/007.jpg",
+    "audio": "/home/vladimir_albrekht/projects/img_to_spec/data/audio/007.wav"
+  },
+  {
+    "image": "/home/vladimir_albrekht/projects/img_to_spec/data/images/009.jpg",
+    "audio": "/home/vladimir_albrekht/projects/img_to_spec/data/audio/009.wav"
+  },
+  {
+    "image": "/home/vladimir_albrekht/projects/img_to_spec/data/images/005.jpg",
+    "audio": "/home/vladimir_albrekht/projects/img_to_spec/data/audio/005.wav"
+  },
+  {
+    "image": "/home/vladimir_albrekht/projects/img_to_spec/data/images/006.jpg",
+    "audio": "/home/vladimir_albrekht/projects/img_to_spec/data/audio/006.wav"
+  },
+  {
+    "image": "/home/vladimir_albrekht/projects/img_to_spec/data/images/014.jpg",
+    "audio": "/home/vladimir_albrekht/projects/img_to_spec/data/audio/014.wav"
+  },
+  {
+    "image": "/home/vladimir_albrekht/projects/img_to_spec/data/images/010.jpg",
+    "audio": "/home/vladimir_albrekht/projects/img_to_spec/data/audio/010.wav"
+  },
+  {
+    "image": "/home/vladimir_albrekht/projects/img_to_spec/data/images/012.jpg",
+    "audio": "/home/vladimir_albrekht/projects/img_to_spec/data/audio/012.wav"
+  },
+  {
+    "image": "/home/vladimir_albrekht/projects/img_to_spec/data/images/008.jpg",
+    "audio": "/home/vladimir_albrekht/projects/img_to_spec/data/audio/008.wav"
+  },
+  {
+    "image": "/home/vladimir_albrekht/projects/img_to_spec/data/images/001.jpg",
+    "audio": "/home/vladimir_albrekht/projects/img_to_spec/data/audio/001.wav"
+  },
+  {
+    "image": "/home/vladimir_albrekht/projects/img_to_spec/data/images/002.jpg",
+    "audio": "/home/vladimir_albrekht/projects/img_to_spec/data/audio/002.wav"
+  },
+  {
+    "image": "/home/vladimir_albrekht/projects/img_to_spec/data/images/013.jpg",
+    "audio": "/home/vladimir_albrekht/projects/img_to_spec/data/audio/013.wav"
+  },
+  {
+    "image": "/home/vladimir_albrekht/projects/img_to_spec/data/images/015.jpg",
+    "audio": "/home/vladimir_albrekht/projects/img_to_spec/data/audio/015.wav"
+  },
+  {
+    "image": "/home/vladimir_albrekht/projects/img_to_spec/data/images/004.jpg",
+    "audio": "/home/vladimir_albrekht/projects/img_to_spec/data/audio/004.wav"
+  },
+  {
+    "image": "/home/vladimir_albrekht/projects/img_to_spec/data/images/011.jpg",
+    "audio": "/home/vladimir_albrekht/projects/img_to_spec/data/audio/011.wav"
+  }
+]
