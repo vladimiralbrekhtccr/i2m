@@ -720,7 +720,8 @@ def train():
     NUM_EPOCHS = 500
     SAVE_EPOCHS_STEP = 50
     LR = 1e-4
-    TRAIN_DATA_PATH = "/scratch/vladimir_albrekht/projects/i2m/src/data"
+    TRAIN_DATA_PATH = os.path.join(os.path.dirname(__file__), "example_of_data")
+
 
     # Validation config
     VAL_EVERY_N_EPOCHS = 10
