@@ -20,6 +20,9 @@ from pathlib import Path
 from datetime import datetime
 import matplotlib.pyplot as plt
 
+torch.backends.cudnn.benchmark = True
+torch.cuda.empty_cache()
+
 load_dotenv()
 
 ### Utils:
@@ -719,8 +722,8 @@ def train():
     
     ### CONF
     DEVICE = f'cuda:{local_rank}'
-    BATCH_SIZE = 32  # Per GPU
-    GRAD_ACCUM_STEPS = 1
+    BATCH_SIZE = 8  # Per GPU
+    GRAD_ACCUM_STEPS = 4
     NUM_EPOCHS = 500
     SAVE_EPOCHS_STEP = 50
     LR = 1e-4
@@ -817,7 +820,7 @@ def train():
         sampler=train_sampler,
         num_workers=4,
         pin_memory=True,
-        drop_last=True
+        drop_last=False # upd
     )
     
     # Validation dataloader (no distributed sampler, run only on main)

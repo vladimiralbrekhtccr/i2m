@@ -1,7 +1,7 @@
 import json
 import random
 
-INPUT_JSON = "src/example_of_data/pairs.json"
+INPUT_JSON = "large_files/ILSVRC/meta_files/pairs.json"
 TRAIN_OUT = "train.json"
 EVAL_OUT = "eval.json"
 TRAIN_RATIO = 0.9
