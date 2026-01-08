@@ -17,7 +17,7 @@ import wandb
 from vocos import Vocos
 from pathlib import Path
 
-from datetime import pdatetime
+from datetime import datetime
 import matplotlib.pyplot as plt
 
 load_dotenv()
